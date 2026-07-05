@@ -415,7 +415,7 @@ PipelineHandlerBase::generateConfiguration(Camera *camera, Span<const StreamRole
 			size = sensorSize;
 			sensorFormat = data->findBestFormat(size, defaultRawBitDepth);
 			pixelFormat = mbusCodeToPixelFormat(sensorFormat.code,
-							    BayerFormat::Packing::CSI2);
+							    BayerFormat::Packing::None);
 			ASSERT(pixelFormat.isValid());
 			colorSpace = ColorSpace::Raw;
 			bufferCount = 2;
@@ -474,7 +474,7 @@ PipelineHandlerBase::generateConfiguration(Camera *camera, Span<const StreamRole
 			/* Translate the MBUS codes to a PixelFormat. */
 			for (const auto &format : data->sensorFormats_) {
 				PixelFormat pf = mbusCodeToPixelFormat(format.first,
-								       BayerFormat::Packing::CSI2);
+								       BayerFormat::Packing::None);
 				if (pf.isValid())
 					deviceFormats.emplace(std::piecewise_construct, std::forward_as_tuple(pf),
 							      std::forward_as_tuple(format.second.begin(), format.second.end()));
