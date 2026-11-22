@@ -111,7 +111,7 @@ CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 		return { vblank, hblank };
 
 	/* IMX585 INCK-derived HMAX/VMAX clock (matches driver IMX585_PIXEL_RATE). */
-	static constexpr double kClock = 74250000.0;
+	static constexpr uint64_t kClock = 74250000;
 	auto toTicks = [](const Duration &d) {
 		return d.get<std::nano>() * (kClock * 1e-9);
 	};
@@ -187,11 +187,11 @@ CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 	}
 
 	/*
-	 * Realise the integer HMAX through HBLANK: the driver programs
-	 * HMAX = floor(minHmax * (width + hblank) / width), so take the smallest
-	 * line length (width + hblank) that floors to bestH.
+	 * Convert sensor clock ticks to pixel clocks, rounding up because the
+	 * driver rounds down when programming HMAX. The ISP can raise
+	 * mode_.minLineLength without changing the sensor pixel clock.
 	 */
-	long lineLengthPck = (bestH * width + minHmax - 1) / minHmax;	/* ceil */
+	long lineLengthPck = (bestH * mode_.pixelRate + kClock - 1) / kClock;
 	uint32_t newHblank = static_cast<uint32_t>(std::max<long>(0, lineLengthPck - width));
 	uint32_t newVblank = static_cast<uint32_t>(std::max<long long>(0, bestV - height));
 
