@@ -330,6 +330,18 @@ int32_t IpaPiSP::platformStart([[maybe_unused]] const ControlList &controls,
 	/* Cause the stitch block to be reset correctly. */
 	lastStitchHdrStatus_ = HdrStatus();
 
+	/* Seed statistics and backend correction before the first frame. */
+	auto *blackLevel = dynamic_cast<RPiController::BlackLevelAlgorithm *>(controller_.getAlgorithm("black_level"));
+	if (blackLevel) {
+		std::scoped_lock<FrontEnd> l(*fe_);
+		BlackLevelStatus status;
+		pisp_be_global_config global;
+		blackLevel->initialValues(status.blackLevelR, status.blackLevelG, status.blackLevelB);
+		be_->GetGlobal(global);
+		applyBlackLevel(&status, global);
+		be_->SetGlobal(global);
+	}
+
 	/* Setup a default decompand curve on startup if needed. */
 	RPiController::DecompandAlgorithm *decompand = dynamic_cast<RPiController::DecompandAlgorithm *>(
 		controller_.getAlgorithm("decompand"));

@@ -20,6 +20,7 @@
 #include "controller/agc_algorithm.h"
 #include "controller/awb_algorithm.h"
 #include "controller/awb_status.h"
+#include "controller/black_level_algorithm.h"
 #include "controller/black_level_status.h"
 #include "controller/ccm_algorithm.h"
 #include "controller/ccm_status.h"
@@ -255,6 +256,18 @@ int32_t IpaBase::configure(const IPACameraSensorInfo &sensorInfo, const ConfigPa
 	 * based on the current sensor mode.
 	 */
 	ControlInfoMap::Map ctrlMap = ipaControls;
+	blackLevelRange_.reset();
+	auto blackLevel = sensorCtrls_.find(V4L2_CID_BRIGHTNESS);
+	if (params.linearImx585 && blackLevel != sensorCtrls_.end() &&
+	    controller_.getAlgorithm("black_level")) {
+		const auto &info = blackLevel->second;
+		int32_t min = std::max(0, info.min().get<int32_t>());
+		int32_t max = std::min(1023, info.max().get<int32_t>());
+		if (min <= max) {
+			blackLevelRange_.emplace(min, max, std::clamp(info.def().get<int32_t>(), min, max));
+			ctrlMap[&controls::rpi::SensorBlackLevelCode] = *blackLevelRange_;
+		}
+	}
 	ctrlMap[&controls::FrameDurationLimits] =
 		ControlInfo(static_cast<int64_t>(mode_.minFrameDuration.get<std::micro>()),
 			    static_cast<int64_t>(mode_.maxFrameDuration.get<std::micro>()),
@@ -300,6 +313,18 @@ void IpaBase::start(const ControlList &controls, StartResult *result)
 {
 	RPiController::Metadata metadata;
 
+	std::optional<uint16_t> ispBlackLevel;
+	if (blackLevelRange_) {
+		streamBlackLevel_ = std::clamp(controls.get(controls::rpi::SensorBlackLevelCode)
+						       .value_or(blackLevelRange_->def().get<int32_t>()),
+					       blackLevelRange_->min().get<int32_t>(),
+					       blackLevelRange_->max().get<int32_t>());
+		ispBlackLevel = streamBlackLevel_ * 64;
+	}
+	auto *blackLevel = dynamic_cast<RPiController::BlackLevelAlgorithm *>(controller_.getAlgorithm("black_level"));
+	if (blackLevel)
+		blackLevel->setSensorBlackLevel(ispBlackLevel);
+
 	if (!controls.empty()) {
 		/* We have been given some controls to action before start. */
 		applyControls(controls);
@@ -321,12 +346,14 @@ void IpaBase::start(const ControlList &controls, StartResult *result)
 	agcStatus_.analogueGain = 0.0;
 
 	metadata.get("agc.status", agcStatus_);
+	ControlList ctrls(sensorCtrls_);
+	if (blackLevelRange_)
+		ctrls.set(V4L2_CID_BRIGHTNESS, streamBlackLevel_);
 	if (agcStatus_.exposureTime && agcStatus_.analogueGain) {
-		ControlList ctrls(sensorCtrls_);
 		applyAGC(&agcStatus_, ctrls);
-		result->controls = std::move(ctrls);
 		setCameraTimeoutValue();
 	}
+	result->controls = std::move(ctrls);
 	/* Make a note of this as it tells us the HDR status of the first few frames. */
 	hdrStatus_ = agcStatus_.hdr;
 
@@ -1238,6 +1265,10 @@ void IpaBase::applyControls(const ControlList &controls)
 			break;
 		}
 
+		case controls::rpi::SENSOR_BLACK_LEVEL_CODE:
+			/* Applied before stream-on in start(). */
+			break;
+
 		case controls::BRIGHTNESS: {
 			RPiController::ContrastAlgorithm *contrast = dynamic_cast<RPiController::ContrastAlgorithm *>(
 				controller_.getAlgorithm("contrast"));
@@ -1615,6 +1646,9 @@ void IpaBase::reportMetadata(unsigned int ipaContext)
 								static_cast<float>(awbStatus->gainB) });
 		libcameraMetadata_.set(controls::ColourTemperature, awbStatus->temperatureK);
 	}
+
+	if (blackLevelRange_)
+		libcameraMetadata_.set(controls::rpi::SensorBlackLevelCode, streamBlackLevel_);
 
 	BlackLevelStatus *blackLevelStatus = rpiMetadata.getLocked<BlackLevelStatus>("black_level.status");
 	if (blackLevelStatus)

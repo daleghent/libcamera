@@ -299,4 +299,13 @@ controls:
         This control returns performance metrics for the CNN processing stage.
         Two values are returned in this span, the runtime of the CNN/DNN stage
         and the DSP stage in milliseconds.
+  - SensorBlackLevelCode:
+      type: int32_t
+      direction: inout
+      description: |
+        Absolute sensor black-level register code for linear IMX585 RAW10 and
+        RAW12 capture. One code raises the pedestal by one RAW10 count or four
+        RAW12 counts. Set this control in Camera::start(). It applies to the
+        entire stream. Stop and restart capture to select another code.
+        The applied code is returned in frame metadata.
 ...

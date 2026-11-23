@@ -47,9 +47,9 @@ int BlackLevel::read(const libcamera::ValueNode &params)
 void BlackLevel::initialValues(uint16_t &blackLevelR, uint16_t &blackLevelG,
 			       uint16_t &blackLevelB)
 {
-	blackLevelR = blackLevelR_;
-	blackLevelG = blackLevelG_;
-	blackLevelB = blackLevelB_;
+	blackLevelR = sensorBlackLevel_.value_or(blackLevelR_);
+	blackLevelG = sensorBlackLevel_.value_or(blackLevelG_);
+	blackLevelB = sensorBlackLevel_.value_or(blackLevelB_);
 }
 
 void BlackLevel::prepare(Metadata *imageMetadata)
@@ -59,9 +59,7 @@ void BlackLevel::prepare(Metadata *imageMetadata)
 	 * something?
 	 */
 	struct BlackLevelStatus status;
-	status.blackLevelR = blackLevelR_;
-	status.blackLevelG = blackLevelG_;
-	status.blackLevelB = blackLevelB_;
+	initialValues(status.blackLevelR, status.blackLevelG, status.blackLevelB);
 	imageMetadata->set("black_level.status", status);
 }
 

@@ -79,7 +79,7 @@ public:
 	void metadataReady(const ControlList &metadata);
 	void setDelayedControls(const ControlList &controls, uint32_t delayContext);
 	void setLensControls(const ControlList &controls);
-	void setSensorControls(ControlList &controls);
+	int setSensorControls(ControlList &controls);
 
 	Rectangle scaleIspCrop(const Rectangle &ispCrop) const;
 	void applyScalerCrop(const ControlList &controls);

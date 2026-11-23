@@ -9,6 +9,7 @@
 #include <array>
 #include <deque>
 #include <map>
+#include <optional>
 #include <stdint.h>
 
 #include <libcamera/base/utils.h>
@@ -109,6 +110,8 @@ private:
 
 	bool lensPresent_;
 	bool monoSensor_;
+	std::optional<ControlInfo> blackLevelRange_;
+	int32_t streamBlackLevel_ = 0;
 
 	std::array<RPiController::Metadata, numMetadataContexts> rpiMetadata_;
 

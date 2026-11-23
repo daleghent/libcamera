@@ -684,8 +684,11 @@ int PipelineHandlerBase::start(Camera *camera, const ControlList *controls)
 			  &result);
 
 	/* Apply any gain/exposure settings that the IPA may have passed back. */
-	if (!result.controls.empty())
-		data->setSensorControls(result.controls);
+	if (!result.controls.empty()) {
+		ret = data->setSensorControls(result.controls);
+		if (ret && result.controls.contains(V4L2_CID_BRIGHTNESS))
+			return ret < 0 ? ret : -EIO;
+	}
 
 	/* Configure the number of startup and invalid frames reported by the IPA. */
 	data->startupFrameCount_ = result.startupFrameCount;
@@ -1257,6 +1260,15 @@ int CameraData::configureIPA(const CameraConfiguration *config, ipa::RPi::Config
 		return ret;
 	}
 
+	/* Clear HDR can produce 12-bit companded samples too. Check the sensor. */
+	if (sensor_->model() == "imx585" &&
+	    (sensorInfo_.bitsPerPixel == 10 || sensorInfo_.bitsPerPixel == 12) &&
+	    sensor_->controls().count(V4L2_CID_WIDE_DYNAMIC_RANGE)) {
+		auto mode = sensor_->getControls({ { V4L2_CID_WIDE_DYNAMIC_RANGE } });
+		params.linearImx585 = mode.contains(V4L2_CID_WIDE_DYNAMIC_RANGE) &&
+			mode.get(V4L2_CID_WIDE_DYNAMIC_RANGE).get<int32_t>() == 0;
+	}
+
 	/* Always send the user transform to the IPA. */
 	Transform transform = config->orientation / Orientation::Rotate0;
 	params.transform = static_cast<unsigned int>(transform);
@@ -1322,7 +1334,7 @@ void CameraData::setLensControls(const ControlList &controls)
 	}
 }
 
-void CameraData::setSensorControls(ControlList &controls)
+int CameraData::setSensorControls(ControlList &controls)
 {
 	/*
 	 * We need to ensure that if both VBLANK and EXPOSURE are present, the
@@ -1341,7 +1353,7 @@ void CameraData::setSensorControls(ControlList &controls)
 		sensor_->setControls(&vblank_ctrl);
 	}
 
-	sensor_->setControls(&controls);
+	return sensor_->setControls(&controls);
 }
 
 Rectangle CameraData::scaleIspCrop(const Rectangle &ispCrop) const

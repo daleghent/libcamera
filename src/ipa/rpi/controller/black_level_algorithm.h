@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "algorithm.h"
 
 namespace RPiController {
@@ -18,6 +20,10 @@ public:
 	/* A black level algorithm must provide the following: */
 	virtual void initialValues(uint16_t &blackLevelR, uint16_t &blackLevelG,
 				   uint16_t &blackLevelB) = 0;
+	void setSensorBlackLevel(std::optional<uint16_t> level) { sensorBlackLevel_ = level; }
+
+protected:
+	std::optional<uint16_t> sensorBlackLevel_;
 };
 
 } /* namespace RPiController */
