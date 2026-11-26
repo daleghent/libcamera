@@ -9,7 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
+#include <limits>
 
 #include "cam_helper.h"
 #include "math.h"
@@ -24,6 +24,7 @@ public:
 	CamHelperImx585();
 	uint32_t gainCode(double gain) const override;
 	double gain(uint32_t gainCode) const override;
+	uint32_t exposureLines(Duration exposure, Duration lineLength) const override;
 	Duration hblankToLineLength(uint32_t hblank) const override;
 	unsigned int hideFramesStartup() const override;
 	unsigned int hideFramesModeSwitch() const override;
@@ -60,6 +61,14 @@ uint32_t CamHelperImx585::gainCode(double gain) const
 double CamHelperImx585::gain(uint32_t gainCode) const
 {
 	return pow(10, 0.015 * gainCode);
+}
+
+uint32_t CamHelperImx585::exposureLines(Duration exposure, Duration lineLength) const
+{
+	/* Both VMAX and SHR0 are even. Limit before converting an unbounded duration. */
+	const double pairs = std::clamp(exposure / (2 * lineLength), 1.0,
+					double(mode_.maxFrameLength / 2));
+	return 2 * std::lround(pairs);
 }
 
 /* The driver reports floor(width * sensorClock / native HMAX) as pixel rate. */
@@ -106,134 +115,77 @@ unsigned int CamHelperImx585::mistrustFramesModeSwitch() const
 	return hideFramesModeSwitch();
 }
 
-/*
- * Exact-frame-rate blanking.
- *
- * The IMX585 frame period is VMAX * HMAX / INCK, with VMAX (frame length) and
- * HMAX (line length) both integer registers and the driver rounding VMAX even.
- * The default CamHelper::getBlanking() holds HMAX at the mode minimum and only
- * rounds VMAX, so a requested rate quantises to ~one line (~0.01 fps).
- *
- * When a single fixed frame rate is pinned we instead search the integer
- * (VMAX, HMAX) lattice for the pair whose product lands on the requested period
- * (VMAX even, HMAX within a bounded stretch of the mode minimum), then realise
- * that HMAX through HBLANK. This hits standard rates exactly and arbitrary rates
- * to well under a part per million, at the cost of a slightly longer line.
- *
- * One wrinkle: rpicam-apps passes the rate as the FrameDurationLimits control,
- * which is integer microseconds, so "30 fps" arrives as 33333µs (= 30.0007 fps)
- * and the true 30.000 period is already lost. We snap it back: if the requested
- * (truncated) period is exactly what a nominal integer rate rounds to, and that
- * rate has a whole, even tick count (so an exact VMAX*HMAX exists), we retarget
- * the true period. 24/30/60 then come out dead-on instead of tens of ppm high.
- */
+/* The frame period is the product of even VMAX and integer HMAX in sensor ticks. */
 std::pair<uint32_t, uint32_t>
 CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 			     Duration maxFrameDuration) const
 {
-	/*
-	 * Default blanking first: this clamps the exposure to the frame and
-	 * handles the variable-rate (AGC free-running) path unchanged.
-	 */
-	auto [vblank, hblank] = CamHelper::getBlanking(exposure, minFrameDuration,
-						       maxFrameDuration);
+	const auto toTicks = [](Duration duration) -> double {
+		return duration / (1.0s / sensorClock);
+	};
+	const uint32_t maxPixels = std::llround(mode_.maxLineLength * mode_.pixelRate / 1.0s);
+	const uint32_t maxH = hblankToHmax(maxPixels - mode_.width);
+	const uint32_t minH = mode_.minLineLength <= Duration(mode_.width * (1.0s / mode_.pixelRate))
+			      ? nativeHmax()
+			      : std::min<uint32_t>(std::ceil(toTicks(mode_.minLineLength)), maxH);
+	const uint32_t minV = utils::alignUp(mode_.minFrameLength, 2);
+	const uint32_t maxV = utils::alignDown(mode_.maxFrameLength, 2);
+	const double shortest = double(minH) * minV;
+	const double longest = double(maxH) * maxV;
+	const double minTicks = std::clamp(toTicks(minFrameDuration), shortest, longest);
+	const double maxTicks = std::clamp(toTicks(maxFrameDuration), minTicks, longest);
+	const double exposureTicks = std::clamp(toTicks(exposure), 0.0, maxTicks);
 
-	/* Only refine a single pinned rate on a mode whose line can be stretched. */
-	if (minFrameDuration != maxFrameDuration ||
-	    mode_.maxLineLength <= mode_.minLineLength)
-		return { vblank, hblank };
-
-	/* IMX585 INCK-derived HMAX/VMAX clock (matches driver IMX585_PIXEL_RATE). */
-	auto toTicks = [](const Duration &d) {
-		return d.get<std::nano>() * (sensorClock * 1e-9);
+	/* Stretch the line only when the maximum frame length requires it. */
+	const double requiredH = std::clamp(exposureTicks / (maxV - frameIntegrationDiff_),
+					    minTicks / maxV, maxTicks / maxV);
+	uint32_t bestH = std::clamp<uint32_t>(std::ceil(requiredH), minH, maxH);
+	const double wanted = std::clamp(exposureTicks + frameIntegrationDiff_ * double(bestH),
+					 minTicks, maxTicks);
+	auto nearestEven = [&](double ticks, uint32_t hmax) -> uint32_t {
+		return std::clamp(2.0 * std::round(ticks / (2 * hmax)), double(minV), double(maxV));
 	};
 
-	const long height = mode_.height;
-	const long minHmax = mode_.minLineLength <= mode_.width * (1.0s / mode_.pixelRate)
-			     ? nativeHmax() : std::ceil(toTicks(mode_.minLineLength));
-	const uint32_t maxPixels = std::llround(mode_.maxLineLength * mode_.pixelRate / 1.0s);
-	const long capHmax = std::min<long>(hblankToHmax(maxPixels - mode_.width),
-					    minHmax + minHmax / 2);
-	long long target = std::llround(toTicks(minFrameDuration));
-	if (minHmax <= 0 || target <= 0)
-		return { vblank, hblank };
+	uint32_t bestV = nearestEven(wanted, bestH);
+	const bool fixed = minFrameDuration == maxFrameDuration;
+	if (!fixed) {
+		/* Stay inside the requested interval when it contains an even frame length. */
+		const double lower = std::max<double>(minV, 2 * std::ceil(minTicks / (2 * bestH)));
+		const double upper = std::min<double>(maxV, 2 * std::floor(maxTicks / (2 * bestH)));
+		if (lower <= upper)
+			bestV = std::clamp<double>(bestV, lower, upper);
+	} else {
+		int64_t target = std::llround(wanted);
 
-	/*
-	 * Snap to a nominal integer frame rate. The request reached us as integer
-	 * microseconds (rpicam truncates 1e6/fps, so 24 fps arrives as 41666µs, not
-	 * 41667), so recover the rate the user almost certainly meant: take the
-	 * implied fps, and if the request is within a microsecond of that nominal
-	 * rate's exact period, the µs quantisation is the only difference — retarget
-	 * the true period. Guard on the period being a whole, even number of ticks
-	 * so an exact (even VMAX)*HMAX solution exists; this also naturally excludes
-	 * the NTSC fractions (23.976/29.97/59.94), whose period is not an integer
-	 * tick count and is tens of µs off an integer rate, so it cannot snap.
-	 */
-	const double reqUs = minFrameDuration.get<std::micro>();
-	const long nominalFps = std::lround(sensorClock / static_cast<double>(target));
-	if (nominalFps > 0 && std::fabs(1.0e6 / nominalFps - reqUs) < 1.0) {
-		const double exact = sensorClock / static_cast<double>(nominalFps);
-		const long long exactTicks = std::llround(exact);
-		if (exact == std::floor(exact) && (exactTicks & 1LL) == 0)
-			target = exactTicks;
-	}
+		/* Recover nominal integer rates from the API's whole-microsecond period. */
+		const long rate = std::lround(double(sensorClock) / target);
+		if (rate > 0 && std::abs(1.0e6 / rate - minFrameDuration.get<std::micro>()) < 1.0 &&
+		    sensorClock % (2 * rate) == 0)
+			target = sensorClock / rate;
 
-	long bestH = minHmax;
-	long long bestV = (static_cast<long long>(vblank) + height) & ~1LL;
-	long long bestErr = std::llabs(bestV * bestH - target);
-
-	/*
-	 * Longer lines mean more rolling-shutter skew, so among acceptable
-	 * solutions we want the *smallest* HMAX. The requested period is itself
-	 * only known to ±½µs (the FrameDurationLimits control is integer µs), so
-	 * any lattice point within that band is as accurate as the request. Track
-	 * the smallest such HMAX and prefer it, unless the rate can be hit exactly
-	 * (e.g. 25/50 fps) — exact always wins.
-	 */
-	const long long halfUs = std::llround(sensorClock / 2.0e6);
-	long lowH = -1;
-	long long lowV = 0;
-
-	for (long h = minHmax; h <= capHmax && bestErr; ++h) {
-		long long vIdeal = (target + h / 2) / h;	/* nearest VMAX */
-		long long vEven = vIdeal & ~1LL;
-		for (long long v : { vEven, vEven + 2 }) {
-			if (v < mode_.minFrameLength || v > mode_.maxFrameLength)
-				continue;
-			long long err = std::llabs(v * h - target);
-			if (err < bestErr) {
-				bestErr = err;
-				bestV = v;
+		/* Prefer an exact period, then the shortest line within half a microsecond. */
+		const uint32_t firstH = bestH;
+		const uint32_t lastH = std::min(maxH, firstH + minH / 2);
+		const int64_t halfUs = std::llround(sensorClock / 2.0e6);
+		int64_t bestError = std::numeric_limits<int64_t>::max();
+		for (uint32_t h = firstH; h <= lastH; ++h) {
+			const uint32_t v = nearestEven(target, h);
+			const int64_t error = std::abs(int64_t(v) * h - target);
+			if (!error || (bestError > halfUs && error < bestError)) {
 				bestH = h;
+				bestV = v;
+				bestError = error;
 			}
-			if (lowH < 0 && err <= halfUs) {	/* smallest in-µs HMAX */
-				lowH = h;
-				lowV = v;
-			}
+			if (!bestError)
+				break;
 		}
 	}
 
-	/* Non-exact rate: drop to the lowest HMAX that is still within the µs. */
-	if (bestErr != 0 && lowH >= 0 && lowH < bestH) {
-		bestH = lowH;
-		bestV = lowV;
-	}
-
-	/*
-	 * Convert sensor clock ticks to pixel clocks, rounding up because the
-	 * driver rounds down when programming HMAX. The ISP can raise
-	 * mode_.minLineLength without changing the sensor pixel clock.
-	 */
-	uint32_t newHblank = hmaxToHblank(bestH);
-	uint32_t newVblank = static_cast<uint32_t>(std::max<long long>(0, bestV - height));
-
-	/* Re-fit the exposure to the chosen frame and line length. */
-	Duration lineLength = hblankToLineLength(newHblank);
-	uint32_t expLines = std::min<uint32_t>(exposureLines(exposure, lineLength),
-					       static_cast<uint32_t>(bestV) - frameIntegrationDiff_);
-	exposure = CamHelper::exposure(expLines, lineLength);
-
-	return { newVblank, newHblank };
+	const uint32_t hblank = hmaxToHblank(bestH);
+	const Duration lineLength = hblankToLineLength(hblank);
+	const uint32_t lines = std::min(exposureLines(exposure, lineLength), bestV - frameIntegrationDiff_);
+	exposure = this->exposure(lines, lineLength);
+	return { bestV - mode_.height, hblank };
 }
 
 
