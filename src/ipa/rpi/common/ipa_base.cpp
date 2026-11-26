@@ -220,6 +220,10 @@ int32_t IpaBase::configure(const IPACameraSensorInfo &sensorInfo, const ConfigPa
 	/* Setup a metadata ControlList to output metadata. */
 	libcameraMetadata_ = ControlList(controls::controls);
 
+	/* Companded Clear HDR also uses RAW12. Use the queried WDR state. */
+	if (sensorInfo.model == "imx585")
+		helper_->setFrameIntegrationDiff(params.linearImx585 ? 8 : 16);
+
 	/* Re-assemble camera mode using the sensor info. */
 	setMode(sensorInfo);
 

@@ -32,12 +32,6 @@ public:
 	getBlanking(Duration &exposure, Duration minFrameDuration,
 		    Duration maxFrameDuration) const override;
 
-private:
-	/*
-	 * Smallest difference between the frame length and integration time,
-	 * in units of lines.
-	 */
-	static constexpr int frameIntegrationDiff = 4;
 };
 
 /*
@@ -46,7 +40,7 @@ private:
  */
 
 CamHelperImx585::CamHelperImx585()
-	: CamHelper({}, frameIntegrationDiff)
+	: CamHelper({}, 16)
 {
 }
 
@@ -209,7 +203,7 @@ CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 	/* Re-fit the exposure to the chosen frame and line length. */
 	Duration lineLength = hblankToLineLength(newHblank);
 	uint32_t expLines = std::min<uint32_t>(exposureLines(exposure, lineLength),
-					       static_cast<uint32_t>(bestV) - frameIntegrationDiff);
+					       static_cast<uint32_t>(bestV) - frameIntegrationDiff_);
 	exposure = CamHelper::exposure(expLines, lineLength);
 
 	return { newVblank, newHblank };

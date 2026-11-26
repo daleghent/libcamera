@@ -71,6 +71,7 @@ public:
 	CamHelper(std::unique_ptr<MdParser> parser, unsigned int frameIntegrationDiff);
 	virtual ~CamHelper();
 	void setCameraMode(const CameraMode &mode);
+	void setFrameIntegrationDiff(unsigned int lines) { frameIntegrationDiff_ = lines; }
 	void setHwConfig(const Controller::HardwareConfig &hwConfig);
 	virtual void prepare(libcamera::Span<const uint8_t> buffer,
 			     Metadata &metadata);
@@ -104,7 +105,6 @@ protected:
 	CameraMode mode_;
 	Controller::HardwareConfig hwConfig_;
 
-private:
 	/*
 	 * Smallest difference between the frame length and integration time,
 	 * in units of lines.
