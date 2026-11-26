@@ -24,7 +24,7 @@ public:
 	CamHelperImx585();
 	uint32_t gainCode(double gain) const override;
 	double gain(uint32_t gainCode) const override;
-        unsigned int hideFramesStartup() const override;
+	unsigned int hideFramesStartup() const override;
 	unsigned int hideFramesModeSwitch() const override;
 	std::pair<uint32_t, uint32_t>
 	getBlanking(Duration &exposure, Duration minFrameDuration,
@@ -62,14 +62,14 @@ double CamHelperImx585::gain(uint32_t gainCode) const
 
 unsigned int CamHelperImx585::hideFramesStartup() const
 {
-	/* On startup, we seem to get 1 bad frame. */
-	return 1;
+	/* Sony IMX585 Software Reference Manual, Rev. 0.3, p. 7. */
+	return 8;
 }
 
 unsigned int CamHelperImx585::hideFramesModeSwitch() const
 {
-	/* After a mode switch, we seem to get 1 bad frame. */
-	return 1;
+	/* Each stream restart releases the sensor from standby again. */
+	return hideFramesStartup();
 }
 
 
