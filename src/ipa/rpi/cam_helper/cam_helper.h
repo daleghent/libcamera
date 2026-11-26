@@ -83,7 +83,7 @@ public:
 	virtual std::pair<uint32_t, uint32_t> getBlanking(libcamera::utils::Duration &exposure,
 							  libcamera::utils::Duration minFrameDuration,
 							  libcamera::utils::Duration maxFrameDuration) const;
-	libcamera::utils::Duration hblankToLineLength(uint32_t hblank) const;
+	virtual libcamera::utils::Duration hblankToLineLength(uint32_t hblank) const;
 	uint32_t lineLengthToHblank(const libcamera::utils::Duration &duration) const;
 	libcamera::utils::Duration lineLengthPckToDuration(uint32_t lineLengthPck) const;
 	virtual uint32_t gainCode(double gain) const = 0;

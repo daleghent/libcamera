@@ -24,6 +24,7 @@ public:
 	CamHelperImx585();
 	uint32_t gainCode(double gain) const override;
 	double gain(uint32_t gainCode) const override;
+	Duration hblankToLineLength(uint32_t hblank) const override;
 	unsigned int hideFramesStartup() const override;
 	unsigned int hideFramesModeSwitch() const override;
 	unsigned int mistrustFramesStartup() const override;
@@ -32,6 +33,11 @@ public:
 	getBlanking(Duration &exposure, Duration minFrameDuration,
 		    Duration maxFrameDuration) const override;
 
+private:
+	static constexpr uint64_t sensorClock = 74250000;
+	uint32_t nativeHmax() const;
+	uint32_t hmaxToHblank(uint32_t hmax) const;
+	uint32_t hblankToHmax(uint32_t hblank) const;
 };
 
 /*
@@ -54,6 +60,28 @@ uint32_t CamHelperImx585::gainCode(double gain) const
 double CamHelperImx585::gain(uint32_t gainCode) const
 {
 	return pow(10, 0.015 * gainCode);
+}
+
+/* The driver reports floor(width * sensorClock / native HMAX) as pixel rate. */
+uint32_t CamHelperImx585::nativeHmax() const
+{
+	return (mode_.width * sensorClock + mode_.pixelRate / 2) / mode_.pixelRate;
+}
+
+uint32_t CamHelperImx585::hmaxToHblank(uint32_t hmax) const
+{
+	const uint32_t base = nativeHmax();
+	return (uint64_t(hmax) * mode_.width + base - 1) / base - mode_.width;
+}
+
+uint32_t CamHelperImx585::hblankToHmax(uint32_t hblank) const
+{
+	return uint64_t(nativeHmax()) * (mode_.width + hblank) / mode_.width;
+}
+
+Duration CamHelperImx585::hblankToLineLength(uint32_t hblank) const
+{
+	return hblankToHmax(hblank) * (1.0s / sensorClock);
 }
 
 unsigned int CamHelperImx585::hideFramesStartup() const
@@ -116,15 +144,15 @@ CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 		return { vblank, hblank };
 
 	/* IMX585 INCK-derived HMAX/VMAX clock (matches driver IMX585_PIXEL_RATE). */
-	static constexpr uint64_t kClock = 74250000;
 	auto toTicks = [](const Duration &d) {
-		return d.get<std::nano>() * (kClock * 1e-9);
+		return d.get<std::nano>() * (sensorClock * 1e-9);
 	};
 
-	const long width = mode_.width;
 	const long height = mode_.height;
-	const long minHmax = std::lround(toTicks(mode_.minLineLength));
-	const long capHmax = std::min<long>(std::lround(toTicks(mode_.maxLineLength)),
+	const long minHmax = mode_.minLineLength <= mode_.width * (1.0s / mode_.pixelRate)
+			     ? nativeHmax() : std::ceil(toTicks(mode_.minLineLength));
+	const uint32_t maxPixels = std::llround(mode_.maxLineLength * mode_.pixelRate / 1.0s);
+	const long capHmax = std::min<long>(hblankToHmax(maxPixels - mode_.width),
 					    minHmax + minHmax / 2);
 	long long target = std::llround(toTicks(minFrameDuration));
 	if (minHmax <= 0 || target <= 0)
@@ -142,9 +170,9 @@ CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 	 * tick count and is tens of µs off an integer rate, so it cannot snap.
 	 */
 	const double reqUs = minFrameDuration.get<std::micro>();
-	const long nominalFps = std::lround(kClock / static_cast<double>(target));
+	const long nominalFps = std::lround(sensorClock / static_cast<double>(target));
 	if (nominalFps > 0 && std::fabs(1.0e6 / nominalFps - reqUs) < 1.0) {
-		const double exact = kClock / static_cast<double>(nominalFps);
+		const double exact = sensorClock / static_cast<double>(nominalFps);
 		const long long exactTicks = std::llround(exact);
 		if (exact == std::floor(exact) && (exactTicks & 1LL) == 0)
 			target = exactTicks;
@@ -162,7 +190,7 @@ CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 	 * the smallest such HMAX and prefer it, unless the rate can be hit exactly
 	 * (e.g. 25/50 fps) — exact always wins.
 	 */
-	const long long halfUs = std::llround(kClock / 2.0e6);
+	const long long halfUs = std::llround(sensorClock / 2.0e6);
 	long lowH = -1;
 	long long lowV = 0;
 
@@ -196,8 +224,7 @@ CamHelperImx585::getBlanking(Duration &exposure, Duration minFrameDuration,
 	 * driver rounds down when programming HMAX. The ISP can raise
 	 * mode_.minLineLength without changing the sensor pixel clock.
 	 */
-	long lineLengthPck = (bestH * mode_.pixelRate + kClock - 1) / kClock;
-	uint32_t newHblank = static_cast<uint32_t>(std::max<long>(0, lineLengthPck - width));
+	uint32_t newHblank = hmaxToHblank(bestH);
 	uint32_t newVblank = static_cast<uint32_t>(std::max<long long>(0, bestV - height));
 
 	/* Re-fit the exposure to the chosen frame and line length. */
