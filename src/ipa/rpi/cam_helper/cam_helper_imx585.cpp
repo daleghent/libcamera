@@ -26,6 +26,8 @@ public:
 	double gain(uint32_t gainCode) const override;
 	unsigned int hideFramesStartup() const override;
 	unsigned int hideFramesModeSwitch() const override;
+	unsigned int mistrustFramesStartup() const override;
+	unsigned int mistrustFramesModeSwitch() const override;
 	std::pair<uint32_t, uint32_t>
 	getBlanking(Duration &exposure, Duration minFrameDuration,
 		    Duration maxFrameDuration) const override;
@@ -72,6 +74,15 @@ unsigned int CamHelperImx585::hideFramesModeSwitch() const
 	return hideFramesStartup();
 }
 
+unsigned int CamHelperImx585::mistrustFramesStartup() const
+{
+	return hideFramesStartup();
+}
+
+unsigned int CamHelperImx585::mistrustFramesModeSwitch() const
+{
+	return hideFramesModeSwitch();
+}
 
 /*
  * Exact-frame-rate blanking.

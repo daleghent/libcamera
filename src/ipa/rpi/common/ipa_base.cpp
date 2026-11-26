@@ -523,6 +523,7 @@ void IpaBase::prepareIsp(const PrepareParams &params)
 	 * If the statistics are inline (i.e. already available with the Bayer
 	 * frame), call processStats() now before prepare().
 	 */
+	++frameCount_;
 	if (controller_.getHardwareConfig().statsInline)
 		processStats({ params.buffers, params.ipaContext });
 
@@ -535,7 +536,6 @@ void IpaBase::prepareIsp(const PrepareParams &params)
 	} else
 		platformPrepareAgc(rpiMetadata);
 
-	frameCount_++;
 
 	/* If the statistics are inline the metadata can be returned early. */
 	if (controller_.getHardwareConfig().statsInline)
@@ -551,7 +551,7 @@ void IpaBase::processStats(const ProcessParams &params)
 	RPiController::Metadata &rpiMetadata = rpiMetadata_[ipaContext];
 	Duration offset(0s);
 
-	if (processPending_ && frameCount_ >= mistrustCount_) {
+	if (processPending_ && frameCount_ > mistrustCount_) {
 		auto it = buffers_.find(params.buffers.stats);
 		if (it == buffers_.end()) {
 			LOG(IPARPI, Error) << "Could not find stats buffer!";
