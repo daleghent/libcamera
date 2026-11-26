@@ -705,8 +705,18 @@ void IpaBase::setMode(const IPACameraSensorInfo &sensorInfo)
 	mode_.minExposureTime = helper_->exposure(exposureTimeCtrl.min().get<int32_t>(),
 						  mode_.minLineLength);
 	mode_.maxExposureTime = Duration::max();
-	helper_->getBlanking(mode_.maxExposureTime, mode_.minFrameDuration,
-			     mode_.maxFrameDuration);
+	auto [maxVblank, maxHblank] = helper_->getBlanking(mode_.maxExposureTime, mode_.minFrameDuration,
+							  mode_.maxFrameDuration);
+	if (sensorInfo.model == "imx585") {
+		/* Pixel-clock and ISP limits can fall between physical HMAX ticks. */
+		Duration exposure = 0s;
+		auto [minVblank, minHblank] = helper_->getBlanking(exposure, mode_.minFrameDuration,
+								  mode_.maxFrameDuration);
+		Duration minLine = helper_->hblankToLineLength(minHblank);
+		mode_.minExposureTime = helper_->exposure(exposureTimeCtrl.min().get<int32_t>(), minLine);
+		mode_.minFrameDuration = (mode_.height + minVblank) * minLine;
+		mode_.maxFrameDuration = (mode_.height + maxVblank) * helper_->hblankToLineLength(maxHblank);
+	}
 }
 
 void IpaBase::setCameraTimeoutValue()
