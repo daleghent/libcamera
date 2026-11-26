@@ -756,6 +756,7 @@ public:
 	/* Array of CFE and ISP device streams and associated buffers/streams. */
 	RPi::Device<Cfe, 4> cfe_;
 	RPi::Device<Isp, 8> isp_;
+	V4L2DeviceFormat cfeOutputFormat_;
 
 	const libpisp::PiSPVariant &pispVariant_;
 
@@ -1211,6 +1212,10 @@ PiSPCameraData::platformValidate(RPi::RPiCameraConfiguration *rpiConfig) const
 			bayer.bitDepth = 16;
 		}
 
+		/* The software byte swap needs an unpacked CFE output. */
+		if (MediaBusFormatInfo::info(rpiConfig->sensorFormat_.code).bitsPerPixel == 16)
+			bayer.packing = BayerFormat::Packing::None;
+
 		/* The RAW stream size cannot exceed the sensor frame output - for now. */
 		if (rawStream->size != rpiConfig->sensorFormat_.size ||
 		    rawStream->pixelFormat != bayer.toPixelFormat()) {
@@ -1420,6 +1425,7 @@ int PiSPCameraData::platformConfigure(const RPi::RPiCameraConfiguration *rpiConf
 	const std::vector<RPi::RPiCameraConfiguration::StreamParams> &outStreams = rpiConfig->outStreams_;
 	int ret;
 	V4L2VideoDevice *cfe = cfe_[Cfe::Output0].dev();
+	const bool needsEndianSwap = MediaBusFormatInfo::info(rpiConfig->sensorFormat_.code).bitsPerPixel == 16;
 	V4L2DeviceFormat cfeFormat;
 
 	/*
@@ -1433,9 +1439,9 @@ int PiSPCameraData::platformConfigure(const RPi::RPiCameraConfiguration *rpiConf
 		 */
 		V4L2SubdeviceFormat sensorFormatMod = rpiConfig->sensorFormat_;
 		sensorFormatMod.code = mbusCodeUnpacked16(sensorFormatMod.code);
+		auto packing = needsEndianSwap ? BayerFormat::Packing::None : BayerFormat::Packing::PISP1;
 		cfeFormat = RPi::PipelineHandlerBase::toV4L2DeviceFormat(cfe,
-									 sensorFormatMod,
-									 BayerFormat::Packing::PISP1);
+									 sensorFormatMod, packing);
 		computeOptimalStride(cfeFormat);
 	} else {
 		rawStreams[0].cfg->setStream(&cfe_[Cfe::Output0]);
@@ -1448,7 +1454,7 @@ int PiSPCameraData::platformConfigure(const RPi::RPiCameraConfiguration *rpiConf
 	 * contents to account for the HW missing this feature.
 	 */
 	cfe_[Cfe::Output0].clearFlags(StreamFlag::Needs16bitEndianSwap);
-	if (MediaBusFormatInfo::info(rpiConfig->sensorFormat_.code).bitsPerPixel == 16) {
+	if (needsEndianSwap) {
 		cfe_[Cfe::Output0].setFlags(StreamFlag::Needs16bitEndianSwap);
 		LOG(RPI, Warning)
 			<< "The sensor is configured for a 16-bit output, statistics"
@@ -1467,6 +1473,9 @@ int PiSPCameraData::platformConfigure(const RPi::RPiCameraConfiguration *rpiConf
 	ret = cfe->setFormat(&cfeFormat);
 	if (ret)
 		return ret;
+
+	/* Internal image buffers have no application StreamConfiguration. */
+	cfeOutputFormat_ = cfeFormat;
 
 	/* Set the TDN and Stitch node formats in case they are turned on. */
 	isp_[Isp::TdnOutput].dev()->setFormat(&cfeFormat);
@@ -1716,19 +1725,19 @@ void PiSPCameraData::cfeBufferDequeue(FrameBuffer *buffer)
 		/* Do an endian swap or 14-bit unpacking if needed. */
 		if (stream->getFlags() & StreamFlag::Needs16bitEndianSwap ||
 		    stream->getFlags() & StreamFlag::Needs14bitUnpack) {
-			const unsigned int stride = stream->configuration().stride;
-			const unsigned int width = stream->configuration().size.width;
-			const unsigned int height = stream->configuration().size.height;
 			const RPi::BufferObject &b = stream->getBuffer(index);
 
 			ASSERT(b.mapped);
 			void *mem = b.mapped->planes()[0].data();
 
 			dmabufSyncStart(buffer->planes()[0].fd);
-			if (stream->getFlags() & StreamFlag::Needs16bitEndianSwap)
-				do16BitEndianSwap(mem, width, height, stride);
-			else
-				do14bitUnpack(mem, width, height, stride);
+			if (stream->getFlags() & StreamFlag::Needs16bitEndianSwap) {
+				do16BitEndianSwap(mem, cfeOutputFormat_.size.width, cfeOutputFormat_.size.height,
+						  cfeOutputFormat_.planes[0].bpl);
+			} else {
+				const auto &cfg = stream->configuration();
+				do14bitUnpack(mem, cfg.size.width, cfg.size.height, cfg.stride);
+			}
 			dmabufSyncEnd(buffer->planes()[0].fd);
 		}
 
@@ -1880,8 +1889,7 @@ void PiSPCameraData::prepareIspComplete(const ipa::RPi::BufferIds &buffers, bool
 
 int PiSPCameraData::configureCfe()
 {
-	V4L2DeviceFormat cfeFormat;
-	cfe_[Cfe::Output0].dev()->getFormat(&cfeFormat);
+	V4L2DeviceFormat &cfeFormat = cfeOutputFormat_;
 
 	std::scoped_lock<FrontEnd> l(*fe_);
 
