@@ -415,10 +415,10 @@ void IpaBase::start(const ControlList &controls, StartResult *result)
 		mistrustCount_ = helper_->mistrustFramesModeSwitch();
 	}
 
-	result->startupFrameCount = std::max({ agcConvergenceFrames, awbConvergenceFrames });
 	result->invalidFrameCount = invalidCount_;
-
 	invalidCount_ = std::max({ invalidCount_, agcConvergenceFrames, awbConvergenceFrames });
+	/* The pipeline counts invalid buffers first, then convergence-only buffers. */
+	result->startupFrameCount = invalidCount_ - result->invalidFrameCount;
 
 	LOG(IPARPI, Debug) << "Startup frames: " << result->startupFrameCount
 			   << " Invalid frames: " << result->invalidFrameCount;
