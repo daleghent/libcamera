@@ -370,26 +370,22 @@ void do32BitConversion(void *mem, unsigned int width, unsigned int height,
 #endif
 }
 
-void do16BitEndianSwap([[maybe_unused]] void *mem, [[maybe_unused]] unsigned int width,
-		       [[maybe_unused]] unsigned int height, [[maybe_unused]] unsigned int stride)
+void do16BitEndianSwap(void *mem, unsigned int width, unsigned int height,
+		       unsigned int stride)
 {
-#if __aarch64__
-	for (unsigned int j = 0; j < height; j++) {
-		uint8_t *ptr = (uint8_t *)mem + j * stride;
-		uint64_t count = (width + 7) / 8;
-
-		asm volatile("1: \n"
-				"ld1 {v1.16b}, [%[ptr]] \n"
-				"rev16 v1.16b, v1.16b \n"
-				"st1 {v1.16b}, [%[ptr]], #16 \n"
-				"subs %[count], %[count], #1 \n"
-				"b.gt 1b \n"
-				: [count]"+r" (count), [ptr]"+r" (ptr)
-				:
-				: "cc", "v1", "memory"
-				);
+	/*
+	 * Keep reads from the DMA mapping separate from writes. Alternating
+	 * loads and stores on this mapping stalls the CFE dequeue thread.
+	 */
+	std::vector<uint16_t> row(width);
+	const size_t bytes = width * sizeof(row[0]);
+	auto *line = static_cast<uint8_t *>(mem);
+	for (unsigned int y = 0; y < height; ++y, line += stride) {
+		std::memcpy(row.data(), line, bytes);
+		for (uint16_t &pixel : row)
+			pixel = __builtin_bswap16(pixel);
+		std::memcpy(line, row.data(), bytes);
 	}
-#endif
 }
 
 void do14bitUnpack(void *mem, unsigned int width, unsigned int height,
