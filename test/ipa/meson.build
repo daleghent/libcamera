@@ -15,3 +15,13 @@ foreach test : ipa_test
 
     test(test['name'], exe, suite : 'ipa')
 endforeach
+
+if 'rpi/pisp' in enabled_ipa_names or 'rpi/vc4' in enabled_ipa_names
+    # Link the sensor's static registrar even though it exports no public symbols.
+    exe = executable('imx585', 'imx585.cpp',
+                     objects : rpi_ipa_cam_helper_lib.extract_objects('cam_helper_imx585.cpp'),
+                     dependencies : libcamera_private,
+                     link_with : [rpi_ipa_cam_helper_lib, rpi_ipa_controller_lib, test_libraries],
+                     include_directories : [rpi_ipa_cam_helper_includes, test_includes_internal])
+    test('imx585', exe, suite : 'ipa')
+endif
