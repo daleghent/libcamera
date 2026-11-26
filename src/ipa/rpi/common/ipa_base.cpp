@@ -1836,7 +1836,7 @@ void IpaBase::applyFrameDurations(Duration minFrameDuration, Duration maxFrameDu
 	RPiController::SyncAlgorithm *sync = dynamic_cast<RPiController::SyncAlgorithm *>(
 		controller_.getAlgorithm("sync"));
 	if (sync) {
-		Duration duration = (mode_.height + vblank) * ((mode_.width + hblank) * 1.0s / mode_.pixelRate);
+		Duration duration = (mode_.height + vblank) * helper_->hblankToLineLength(hblank);
 		LOG(IPARPI, Debug) << "setting sync frame duration to  " << duration;
 		sync->setFrameDuration(duration);
 	}
